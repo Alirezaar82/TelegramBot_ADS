@@ -7,7 +7,7 @@
 #     'database': 'Ads'
 # }
 
-# admin_id = 1297080099
+# admin_id =
 
 # links = ['',''] 
       
