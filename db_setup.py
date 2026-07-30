@@ -99,13 +99,25 @@ def _app_connect_kwargs() -> dict:
 
 
 def _can_connect(include_database: bool = False) -> bool:
+    status, _ = _probe_connection(include_database=include_database)
+    return status == "ok"
+
+
+def _probe_connection(include_database: bool = False) -> tuple[str, str]:
+    """Return (status, detail) where status is ok | retry | fatal."""
     kwargs = _app_connect_kwargs() if include_database else _server_connect_kwargs()
     try:
-        with mysql.connector.connect(**kwargs) as connection:
+        with mysql.connector.connect(**kwargs, connection_timeout=5) as connection:
             connection.ping(reconnect=True, attempts=1, delay=0)
-        return True
-    except mysql.connector.Error:
-        return False
+        return "ok", "connected"
+    except mysql.connector.Error as exc:
+        errno = getattr(exc, "errno", None)
+        # Wrong password / unknown user / access denied — do not keep retrying blindly.
+        if errno in (1044, 1045, 1698):
+            return "fatal", f"access denied ({errno}): {exc}"
+        return "retry", f"{errno}: {exc}"
+    except Exception as exc:  # noqa: BLE001 — DNS / network failures
+        return "retry", str(exc)
 
 
 def _mysql_service_names() -> list[str]:
@@ -287,17 +299,45 @@ def _running_in_docker() -> bool:
     return os.path.exists("/.dockerenv")
 
 
+def _should_wait_for_external_db() -> bool:
+    """True when DB is expected as a separate service (compose/remote), not local install."""
+    if os.getenv("DOCKER", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if os.getenv("SKIP_DB_INSTALL", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    host = (config.db.get("host") or "").strip().lower()
+    return host not in ("", "localhost", "127.0.0.1")
+
+
 def _wait_for_server(timeout: int = 90) -> None:
-    _log(f"waiting for database at {config.db.get('host')} (timeout={timeout}s)")
+    host = config.db.get("host")
+    _log(f"waiting for database at {host} (timeout={timeout}s)")
+    last_detail = ""
     for attempt in range(1, timeout + 1):
-        if _can_connect(include_database=True) or _can_connect(include_database=False):
-            _log("database server is reachable")
-            return
+        for include_database in (True, False):
+            status, detail = _probe_connection(include_database=include_database)
+            last_detail = detail
+            if status == "ok":
+                _log("database server is reachable")
+                return
+            if status == "fatal":
+                raise RuntimeError(
+                    f"Database login failed for user={config.db.get('user')}@{host}. {detail}. "
+                    "Check DB_USER / DB_PASSWORD (must match MYSQL_ROOT_PASSWORD / DB_PASSWORD)."
+                )
         if attempt == 1 or attempt % 5 == 0:
-            _log(f"still waiting for database... ({attempt}/{timeout})")
+            _log(f"still waiting for database... ({attempt}/{timeout}) last={last_detail}")
         time.sleep(1)
+
+    if str(host).lower() == "db":
+        hint = (
+            "DB_HOST=db فقط داخل شبکه docker compose کار می‌کند. "
+            "یا `docker compose up -d` بزن، یا در .env بگذار DB_HOST=localhost و MySQL را محلی اجرا کن."
+        )
+    else:
+        hint = "DB_HOST / DB_PASSWORD را چک کن و مطمئن شو سرویس MySQL/MariaDB روشن است."
     raise RuntimeError(
-        "Database is not reachable. Check DB_HOST/DB_USER/DB_PASSWORD and that the DB service is up."
+        f"Database is not reachable at {host}. Last error: {last_detail}. {hint}"
     )
 
 
@@ -306,8 +346,8 @@ def _ensure_server_available() -> None:
         _log("database server is reachable")
         return
 
-    # In Docker Compose the DB is a separate service — never apt-install MySQL here.
-    if _running_in_docker():
+    # External DB (compose service name like "db", or DOCKER=1): wait, never apt-install.
+    if _should_wait_for_external_db():
         _wait_for_server()
         return
 
