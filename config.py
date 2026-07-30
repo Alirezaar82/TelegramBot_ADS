@@ -43,6 +43,12 @@ def _env_list(name: str) -> list[str]:
 
 token = _env("BOT_TOKEN")
 
+# auto = MySQL if available, otherwise SQLite (best for small containers)
+# mysql = force MySQL/MariaDB
+# sqlite = force SQLite file DB (no server install)
+db_engine = (_env("DB_ENGINE", "auto") or "auto").lower()
+sqlite_path = _env("SQLITE_PATH", "data/bot.db")
+
 db = {
     "host": _env("DB_HOST", "localhost"),
     "user": _env("DB_USER", "root"),

@@ -404,19 +404,79 @@ def _create_tables() -> None:
     _log("ensured tables: users, support_messages, charge_requests")
 
 
+def _inside_container() -> bool:
+    return os.path.exists("/.dockerenv")
+
+
+def _use_sqlite_backend() -> None:
+    import db
+
+    db.set_engine("sqlite")
+    db.ensure_sqlite_schema()
+    _log(f"using SQLite file: {config.sqlite_path}")
+
+
+def _use_mysql_backend() -> None:
+    import db
+
+    db.set_engine("mysql")
+    _create_database_if_needed()
+    _create_tables()
+
+
 def setup_database() -> None:
-    """Install/start MySQL if needed, then create database and tables."""
-    _log("starting database bootstrap")
+    """Prepare DB: MySQL when available, otherwise SQLite (no server needed)."""
+    engine = (getattr(config, "db_engine", "auto") or "auto").lower()
+    _log(f"starting database bootstrap (DB_ENGINE={engine})")
+
     try:
-        _ensure_server_available()
-        _create_database_if_needed()
-        _create_tables()
+        if engine == "sqlite":
+            _use_sqlite_backend()
+            _log("database is ready")
+            return
+
+        if engine == "mysql":
+            _ensure_server_available()
+            _use_mysql_backend()
+            _log("database is ready")
+            return
+
+        # --- auto ---
+        if _can_connect(include_database=True) or _can_connect(include_database=False):
+            _use_mysql_backend()
+            _log("database is ready")
+            return
+
+        # Compose/remote host (e.g. DB_HOST=db): wait for that service only.
+        if _should_wait_for_external_db():
+            _wait_for_server()
+            _use_mysql_backend()
+            _log("database is ready")
+            return
+
+        # Small containers almost always OOM/SIGKILL when apt-installing MariaDB.
+        if _inside_container():
+            _log(
+                "running inside a container without MySQL — "
+                "skipping MariaDB install (often killed by OOM) and using SQLite"
+            )
+            _use_sqlite_backend()
+            _log("database is ready")
+            return
+
+        try:
+            _ensure_server_available()
+            _use_mysql_backend()
+        except Exception as exc:
+            _log(f"MySQL setup failed ({exc}); falling back to SQLite")
+            _use_sqlite_backend()
+
+        _log("database is ready")
     except SystemExit:
         raise
     except Exception as exc:
         _log(f"FAILED: {exc}")
         raise SystemExit(1) from exc
-    _log("database is ready")
 
 
 if __name__ == "__main__":
