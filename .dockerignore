@@ -1,0 +1,13 @@
+.git
+.gitignore
+.gitattributes
+.env
+.venv
+venv
+__pycache__
+*.py[cod]
+*.md
+telegram-bot.service
+.cursor
+canvases
+*.canvas.tsx

@@ -1,0 +1,21 @@
+[Unit]
+Description=Telegram Ads Bot
+After=network.target mariadb.service mysql.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/opt/TelegramBot_ADS
+EnvironmentFile=/opt/TelegramBot_ADS/.env
+ExecStart=/opt/TelegramBot_ADS/.venv/bin/python /opt/TelegramBot_ADS/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
